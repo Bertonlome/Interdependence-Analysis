@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY python_dash_generic.py ./
 COPY IA_V7.csv ./
+COPY TA_IA.csv ./
+COPY V8 ./V8
 COPY assets ./assets
 
 # Expose port 7860 (Hugging Face Spaces default)
