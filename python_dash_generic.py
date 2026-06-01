@@ -18,7 +18,7 @@ import pathlib
 
 # Path to the bundled example CSV (works locally and in deployment)
 _HERE = pathlib.Path(__file__).parent
-_EXAMPLE_CANDIDATES = [_HERE / "V7" / "IA_V7.csv", _HERE / "IA_V7.csv"]
+_EXAMPLE_CANDIDATES = [_HERE / "V8" / "IA_V8.csv", _HERE / "IA_V8.csv"]
 EXAMPLE_CSV = next((p for p in _EXAMPLE_CANDIDATES if p.exists()), None)
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True, external_stylesheets=["assets/styles.css"])
@@ -26,20 +26,20 @@ server = app.server
 
 # ─── Design Palette ────────────────────────────────────────────────────────────
 # Edit these to re-skin all graphs / inline styles in one place.
-BG           = "#f3f0eb"
+BG           = "#ffffff"
 SURFACE      = "#f7f7f5"
 SURFACE      = "#f7f7f5"
 INK          = "#1a1a1a"
 INK_MUTED    = "#313131"
 BORDER       = "#b0ada6"
-ACCENT       = "#b42806"      # also used for highlights
+ACCENT       = "#d60b0b"      # also used for highlights
 DARK_GREY = "#1F1F1F"
 
 # Semantic colours (mapped from the IA red/yellow/green/orange scheme)
-PAL_RED      = "#b40606"
-PAL_ORANGE   = "#d95e21"
-PAL_YELLOW   = "#f5e74e"
-PAL_GREEN    = "#1b7f41"
+PAL_RED      = "#d60b0b"
+PAL_ORANGE   = "#d9510c"
+PAL_YELLOW   = "#fae608"
+PAL_GREEN    = "#029c3d"
 # Map used by style_table() and dot colours
 COLOR_MAP = {
     "red":    PAL_RED,
@@ -143,53 +143,96 @@ def detect_team_config(df):
         atype = "human" if name.lower() in ["human", "pilot", "operator", "crew"] else "autonomous"
         agents.append({"name": name, "type": atype})
 
-    # 4. Detect the task description column
-    task_column = None
-    for candidate in ["Task Object", "Task"]:
-        if candidate in df.columns:
-            task_column = candidate
-            break
-    if task_column is None:
-        color_set = set(color_columns)
-        skip = {"Row", "Procedure"}
-        for col in df.columns:
-            if col not in skip and col not in color_set:
-                if df[col].dropna().dtype == object:
-                    task_column = col
-                    break
+    # 4. Detect hierarchy columns: structured levels before first color column.
+    #    Strategy:
+    #    (a) Find all structural candidates (non-color, non-Row before first color col)
+    #    (b) Mark "category-like" columns: keyword match + few unique values
+    #    (c) Detect procedure_column (keyword) and task_column (keyword or cardinality)
+    #    (d) hierarchy = structural columns from procedure to task, excluding category-like
+    color_set = set(color_columns)
+    col_list = list(df.columns)
+    first_color_idx = min((col_list.index(c) for c in color_columns), default=len(col_list))
+    structural_candidates = [
+        col for i, col in enumerate(col_list)
+        if col != "Row" and col not in color_set and i < first_color_idx
+    ]
+    structural_set_all = set(structural_candidates)
 
-    # 4b. Detect the procedure column (hierarchical grouping above tasks)
+    # (b) Category-like: column name matches a classification keyword AND has few unique values
+    CATEGORY_KEYWORDS = {"Category", "Type", "Classification", "Class", "Stage"}
+    category_like = {
+        c for c in structural_candidates
+        if c in CATEGORY_KEYWORDS and df[c].dropna().nunique() <= max(10, len(df) * 0.15)
+    }
+
+    # (c) Procedure column: keyword-based
     procedure_column = None
     for candidate in ["Procedure", "procedure", "Phase", "Group", "Section"]:
-        if candidate in df.columns:
+        if candidate in structural_set_all:
             procedure_column = candidate
             break
+    if procedure_column is None and structural_candidates:
+        procedure_column = structural_candidates[0]
 
-    # 4c. Detect the category column (used for Automation Proportion)
+    # (c) Task column: keyword-based, then fallback to last structural candidate
+    #     (In a hierarchical CSV, the most specific level is defined last,
+    #      closest to the color/assessment columns.)
+    task_column = None
+    for candidate in ["Task Object", "Task"]:
+        if candidate in structural_set_all:
+            task_column = candidate
+            break
+    if task_column is None and structural_candidates:
+        task_column = structural_candidates[-1]
+
+    # (d) Build hierarchy slice: from procedure to task (inclusive), excluding category-like
+    try:
+        proc_idx = col_list.index(procedure_column) if procedure_column else 0
+        task_idx = col_list.index(task_column) if task_column else len(col_list) - 1
+        if proc_idx <= task_idx:
+            hier_slice = [
+                c for c in col_list[proc_idx:task_idx + 1]
+                if c != "Row" and c not in color_set
+            ]
+        else:
+            hier_slice = [c for c in [procedure_column, task_column] if c]
+    except (ValueError, TypeError):
+        hier_slice = [c for c in structural_candidates if c not in category_like]
+    hierarchy_columns = [c for c in hier_slice if c not in category_like][:4]
+
+    # Ensure procedure and task are always represented in the hierarchy
+    if procedure_column and procedure_column not in hierarchy_columns and procedure_column in structural_set_all:
+        hierarchy_columns.insert(0, procedure_column)
+    if task_column and task_column not in hierarchy_columns and task_column in structural_set_all:
+        hierarchy_columns.append(task_column)
+    hierarchy_columns = hierarchy_columns[:4]
+
+    # Update back-compat aliases to reflect final hierarchy
+    procedure_column = hierarchy_columns[0] if hierarchy_columns else None
+    task_column = hierarchy_columns[-1] if hierarchy_columns else None
+
+    # 4b. Detect the category column (from category-like columns, for Automation Proportion)
+    hier_set = set(hierarchy_columns)
     category_column = None
-    color_set = set(color_columns)
-    structural_set = {"Row", procedure_column or "Procedure", task_column or "Task"}
     for candidate in ["Category", "Type", "Classification", "Class", "Stage"]:
-        if candidate in df.columns:
+        if candidate in df.columns and candidate in category_like:
             category_column = candidate
             break
     if category_column is None:
+        # Fallback: first non-hierarchy column with few unique values
+        hier_set = set(hierarchy_columns)
         for col in df.columns:
-            if col in structural_set or col in color_set:
+            if col in hier_set or col in color_set or col == "Row":
                 continue
             vals = df[col].dropna().astype(str)
-            # Heuristic: few unique values relative to row count → categorical
             if 1 < vals.nunique() <= max(10, len(df) * 0.2):
                 category_column = col
                 break
 
-    # 5. Identify metadata columns (everything not Row/structural/task/agent/category)
-    structural = {"Row", procedure_column or "Procedure"}
-    if task_column:
-        structural.add(task_column)
+    # 5. Identify metadata columns (everything not structural/agent/category)
+    structural = {"Row"} | hier_set
     if category_column:
         structural.add(category_column)
-    color_set = set(color_columns)
     metadata = [c for c in df.columns if c not in structural and c not in color_set]
 
     config = {
@@ -200,6 +243,7 @@ def detect_team_config(df):
         ],
         "task_column": task_column or "Task",
         "procedure_column": procedure_column or "Procedure",
+        "hierarchy_columns": hierarchy_columns,
         "category_column": category_column,
         "color_columns": color_columns,
         "metadata_columns": metadata,
@@ -263,6 +307,8 @@ def build_config_from_manual(column_str, task_col="Task", procedure_col="Procedu
     if category_col and category_col not in struct_cols:
         struct_cols.insert(3, category_col)  # insert after task_col
     all_columns = struct_cols + cols + extra_cols
+    # For manual setup, hierarchy = [procedure, task] (2-level)
+    hier_cols = [c for c in [procedure_col, task_col] if c]
 
     config = {
         "agents": agents,
@@ -272,6 +318,7 @@ def build_config_from_manual(column_str, task_col="Task", procedure_col="Procedu
         ],
         "task_column": task_col,
         "procedure_column": procedure_col,
+        "hierarchy_columns": hier_cols,
         "category_column": category_col,
         "color_columns": cols,
         "metadata_columns": extra_cols,
@@ -318,11 +365,16 @@ def get_chosen_performer(row, config, strategy, category_overrides=None):
     agent_types = {a["name"]: a["type"] for a in config["agents"]}
     COLOR_PRIORITY = {"green": 1, "yellow": 2, "orange": 3}
 
-    # Gather available performers (non-red)
+    # Independent strategies cannot use orange performers (orange = forced interdependence)
+    independent_strategy = strategy in ("human_baseline", "agent_whenever_possible")
+
+    # Gather available performers (non-red; orange excluded on independent paths)
     available = {}
     for pc in performer_cols:
         val = str(row.get(pc, "") or "").strip().lower()
         if val in VALID_COLORS and val != "red":
+            if independent_strategy and val == "orange":
+                continue
             available[pc] = val
 
     if not available:
@@ -400,8 +452,19 @@ def build_table_columns(config):
     agent_indices = [i for i, c in enumerate(all_columns) if c in agent_set]
     first_agent_idx = min(agent_indices) if agent_indices else len(all_columns)
 
-    # Columns that belong under the "Teaming Requirements" group header
-    TEAMING_COLS = {"Observability", "Predictability", "Directability"}
+    # OPD columns (full names, abbreviations, single-letter) → "Teaming Requirements"
+    TEAMING_COLS = {
+        "Observability", "Predictability", "Directability",
+        "Obs", "Pred", "Dir",
+        "O", "P", "D",
+    }
+    # Role-assignment columns → "Teaming Structure"
+    TEAMING_ROLE_COLS = {
+        "TARS Performer Role", "TARS Supporter Role",
+        "TA1 Performer Role", "TA1 supporter role",
+        "TA2 performer role", "TA2 supporter role",
+        "TA1 Supporter Role", "TA2 Performer Role",
+    }
 
     columns = []
     for idx, col in enumerate(all_columns):
@@ -412,10 +475,12 @@ def build_table_columns(config):
             name = ["Activity Decomposition", " ", col]
         elif col in TEAMING_COLS:
             name = ["Teaming Requirements", "  ", col]
+        elif col in TEAMING_ROLE_COLS:
+            name = ["Teaming Structure", "   ", col]
         else:
             # Other metadata columns after the agent block (unique spacing
             # prevents accidental merging with neighbouring groups)
-            name = ["  ", "   ", col]
+            name = ["  ", "    ", col]
 
         d = {"name": name, "id": col}
         if col == "Row":
@@ -425,6 +490,9 @@ def build_table_columns(config):
             d["presentation"] = "dropdown"
         else:
             d["editable"] = True
+        # Allow users to hide/show metadata and teaming columns from the header
+        if idx >= first_agent_idx and col not in agent_set:
+            d["hideable"] = True
         columns.append(d)
     return columns
 
@@ -473,43 +541,79 @@ def style_table(df, config):
     return styles
 
 
-def style_procedure_merge(df, config):
-    """Visual pseudo-merge for the Procedure column.
+def style_hierarchy_merge(df, config):
+    """Visual pseudo-merge for all hierarchy columns (up to 4 levels).
 
-    - Continuation rows (same Procedure as the row above): Procedure cell text
-      is made transparent so the cell appears empty, mimicking a merged cell.
-    - First row of each new Procedure group (after the very first): a top
-      separator line is drawn across every column to visually delimit clusters.
+    For each hierarchy level (except the last/task level):
+    - Continuation rows where the value at this level (and all outer levels)
+      is unchanged have their text made transparent, mimicking a merged cell.
+    - The first row of a new group gets a top separator line whose thickness
+      and darkness reflect the depth of the change: outermost level → thickest.
     """
-    proc_col = config.get("procedure_column", "Procedure")
-    if proc_col not in df.columns or df.empty:
+    hierarchy_cols = config.get("hierarchy_columns", [])
+    if not hierarchy_cols:
+        # Backward compat: build from procedure_column + task_column
+        proc_col = config.get("procedure_column", "Procedure")
+        task_col = config.get("task_column", "Task")
+        hierarchy_cols = [c for c in [proc_col, task_col] if c in df.columns]
+
+    hierarchy_cols = [c for c in hierarchy_cols if c in df.columns]
+    if len(hierarchy_cols) <= 1 or df.empty:
         return []
 
     all_cols = config.get("all_columns", [])
     styles = []
-    df_reset = df.reset_index(drop=True)   # ensure 0-based positional index
-    prev_proc = None
+    df_reset = df.reset_index(drop=True)
+
+    # Border width and colour for each hierarchy level (outermost = thickest/darkest)
+    border_widths = [3, 2, 2, 1]
+    border_colors = ["#333333", "#666666", "#999999", "#bbbbbb"]
+
+    # prev_keys[level] = tuple of values at levels 0..level for the previous row
+    prev_keys = [None] * len(hierarchy_cols)
 
     for i in range(len(df_reset)):
-        proc = str(df_reset.at[i, proc_col]).strip()
-        if proc == prev_proc:
-            # Continuation row — hide repeated Procedure label
-            styles.append({
-                "if": {"row_index": i, "column_id": proc_col},
-                "color": "transparent",
-                "borderTop": "1px solid #e8e8e8",   # keep a very faint line
-            })
-        else:
-            # First row of a new group — draw a visible separator
-            if i > 0:
-                for col in all_cols:
-                    styles.append({
-                        "if": {"row_index": i, "column_id": col},
-                        "borderTop": "2px solid #555555",
-                    })
-        prev_proc = proc
+        curr_vals = [str(df_reset.at[i, c]).strip() for c in hierarchy_cols]
+        curr_keys = [tuple(curr_vals[:lvl + 1]) for lvl in range(len(hierarchy_cols))]
+
+        # Find the outermost (smallest index) level that changed
+        change_level = None
+        for lvl in range(len(hierarchy_cols)):
+            if curr_keys[lvl] != prev_keys[lvl]:
+                change_level = lvl
+                break
+
+        # Hide repeated text for display levels (all except the terminal/task level)
+        for lvl in range(len(hierarchy_cols) - 1):
+            col = hierarchy_cols[lvl]
+            # Hide when: this level has not changed AND no outer level has changed
+            if change_level is None or change_level > lvl:
+                styles.append({
+                    "if": {"row_index": i, "column_id": col},
+                    "color": "transparent",
+                    "borderTop": "1px solid #e8e8e8",
+                })
+            # If change_level <= lvl, an outer level changed → show this level's value
+
+        # Draw a top separator when a non-terminal level changes (skip first row and
+        # pure task-level changes, since those would add a border on every single row)
+        if i > 0 and change_level is not None and change_level < len(hierarchy_cols) - 1:
+            bw = border_widths[min(change_level, len(border_widths) - 1)]
+            bc = border_colors[min(change_level, len(border_colors) - 1)]
+            for col in all_cols:
+                styles.append({
+                    "if": {"row_index": i, "column_id": col},
+                    "borderTop": f"{bw}px solid {bc}",
+                })
+
+        prev_keys = curr_keys
 
     return styles
+
+
+# Keep old name as alias for backward compatibility
+def style_procedure_merge(df, config):
+    return style_hierarchy_merge(df, config)
 
 
 # Columns always shown when present; everything else is hidden by default.
@@ -517,15 +621,26 @@ def style_procedure_merge(df, config):
 DEFAULT_VISIBLE_COLUMNS = {
     "Row", "Procedure", "Class", "Type", "Category", "Task", "Task Object",
     "Object", "Value",
+    # Teaming requirements – full names, abbreviations, and single-letter forms
     "Observability", "Predictability", "Directability",
+    "Obs", "Pred", "Dir",
+    "O", "P", "D",
+    # Teaming-structure / role-assignment columns
     "TARS Performer Role", "TARS Supporter Role",
+    "TA1 Performer Role", "TA1 supporter role",
+    "TA2 performer role", "TA2 supporter role",
+    "TA1 Supporter Role", "TA2 Performer Role",  # capitalisation variants
 }
 
 
 def build_hidden_columns(config):
     """Return a list of column IDs that should be hidden by default."""
     agent_set = set(get_agent_columns(config))
-    visible = DEFAULT_VISIBLE_COLUMNS | agent_set
+    # Always show all hierarchy columns (they may not be in DEFAULT_VISIBLE_COLUMNS)
+    hier_set = set(config.get("hierarchy_columns", [
+        config.get("procedure_column", ""), config.get("task_column", "")
+    ]))
+    visible = DEFAULT_VISIBLE_COLUMNS | agent_set | hier_set
     return [c for c in config.get("all_columns", []) if c not in visible]
 
 
@@ -623,10 +738,19 @@ def config_summary_html(config):
         if i < len(all_cols) - 1:
             col_spans.append(", ")
 
+    hier_cols = config.get("hierarchy_columns", [
+        config.get("procedure_column", "Procedure"), config.get("task_column", "Task")
+    ])
+    level_names = ["Level 1 (broadest)", "Level 2", "Level 3", "Level 4 (task)"]
+    hier_labels = [
+        html.Li(f"{level_names[idx] if idx < len(level_names) else f'Level {idx+1}'}: {col}")
+        for idx, col in enumerate(hier_cols)
+    ]
+
     return html.Div([
         html.P([html.B("Agents: "), agents_str]),
-        html.P([html.B("Procedure column: "), config.get("procedure_column", "Procedure")]),
-        html.P([html.B("Task column: "), config["task_column"]]),
+        html.P(html.B("Hierarchy levels:")),
+        html.Ul(hier_labels, style={"marginTop": "2px", "marginBottom": "8px"}),
         html.P([html.B("Category column: "), config.get("category_column") or "—  (none detected)"]),
         html.P([html.B("Columns: ")] + col_spans),
         html.Ul(alt_items),
@@ -1118,6 +1242,7 @@ def build_allocation_bar_chart(df, config):
         textposition="outside",
         hovertemplate="%{label}<br>Count: %{value}<br>%{percent}<extra></extra>",
         hole=0.3,
+        showlegend=False,
     ))
     fig.update_layout(
         title="Task Type Distribution",
@@ -1139,20 +1264,24 @@ def build_autonomy_bar_chart(df, config):
     performer_cols = get_performer_columns(config)
     agent_autonomy = {c: {"autonomous": 0, "non_autonomous": 0} for c in performer_cols}
 
-    prev_performers = []
-    for idx, row in df.iterrows():
-        current_performers = []
+    prev_performers = set()
+    agent_seen = {c: False for c in performer_cols}
+    for _, row in df.iterrows():
+        current_performers = set()
         for col in performer_cols:
             if col in df.columns:
                 val = str(row.get(col, "") or "").strip().lower()
                 if val in VALID_COLORS and val != "red":
-                    current_performers.append(col)
+                    current_performers.add(col)
                     if val == "orange":
                         agent_autonomy[col]["non_autonomous"] += 1
-                    elif idx == 0 or col not in prev_performers:
+                    elif not agent_seen[col]:
+                        pass  # first task for this agent — no prior task to compare, skip
+                    elif col not in prev_performers:
                         agent_autonomy[col]["non_autonomous"] += 1
                     else:
                         agent_autonomy[col]["autonomous"] += 1
+                    agent_seen[col] = True
         prev_performers = current_performers
 
     active_cols = [c for c in performer_cols if (agent_autonomy[c]["autonomous"] + agent_autonomy[c]["non_autonomous"]) > 0]
@@ -1186,7 +1315,7 @@ def build_autonomy_bar_chart(df, config):
             textposition="outside",
             hovertemplate="%{label}<br>Count: %{value}<br>%{percent}<extra></extra>",
             hole=0.3,
-            showlegend=(i == 1),
+            showlegend=False,
         ), row=1, col=i)
 
     fig.update_layout(
@@ -1195,7 +1324,6 @@ def build_autonomy_bar_chart(df, config):
         paper_bgcolor=BG,
         font=dict(family="Space Grotesk, Inter, sans-serif", color=INK),
         margin=dict(l=20, r=20, t=80, b=20),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
     )
     return fig
 
@@ -1301,29 +1429,34 @@ def build_human_baseline_bar_chart(df, config):
 
 def compute_automation_proportion_data(df, config, highlight_track, category_overrides=None):
     """
-    Compute automation proportion P using Liu & Kaber (2025) method.
+    Compute automation proportion range [P_min, P_max] using Liu & Kaber (2025) method.
 
-    For each category k: p_k = (1/T_k) * sum(w(t))
-    Where w(t) = 1.0 if autonomous performer chosen,
-                  0.5 if human performer chosen with autonomous support (full_support modes),
-                  0.0 if human performer chosen alone.
+    Support is opportunistic (optional) unless the performer value is orange (mandatory).
+    For agent performers, human support is optional unless the human supporter value is orange.
 
-    P = (1/K) * sum(p_k)
+    Per-task weight ranges:
+      Human performer, orange   → mandatory support     → w = 0.5  (fixed)
+      Human performer, grn/yel  → optional auto-support → w ∈ [0.0, 0.5]
+      Human performer, no sup   →                        w = 0.0  (fixed)
+      Agent performer, orange human supporter → mandatory → w = 0.75 (fixed)
+      Agent performer, grn/yel human supporter → optional → w ∈ [0.75, 1.0]
+      Agent performer, no human support        →             w = 1.0  (fixed)
 
-    Returns (P, category_scores_dict) or (None, {}) if not applicable.
+    Returns (P_min, P_max, category_scores_dict) where each entry is (pk_min, pk_max),
+    or (None, None, {}) if not applicable.
     """
     cat_col = config.get("category_column") or "Category"
     if config is None or df.empty or cat_col not in df.columns:
-        return None, {}
+        return None, None, {}
 
     if not highlight_track or highlight_track == "none":
-        return None, {}
+        return None, None, {}
 
     agent_types = {a["name"]: a["type"] for a in config["agents"]}
     categories = sorted(df[cat_col].dropna().unique())
 
     if not categories:
-        return None, {}
+        return None, None, {}
 
     K = len(categories)
     category_scores = {}
@@ -1337,38 +1470,81 @@ def compute_automation_proportion_data(df, config, highlight_track, category_ove
         if Tk == 0:
             continue
 
-        weights = []
+        w_mins, w_maxs = [], []
         for _, row in cat_df.iterrows():
             chosen = get_chosen_performer(row, config, highlight_track, category_overrides)
 
             if chosen is None:
-                weights.append(0.0)
+                w_mins.append(0.0)
+                w_maxs.append(0.0)
                 continue
 
             chosen_type = agent_types.get(chosen.rstrip("*"), "autonomous")
+            chosen_val = str(row.get(chosen, "") or "").strip().lower()
 
             if chosen_type == "autonomous":
-                weights.append(1.0)
-            elif chosen_type == "human" and is_full_support:
-                # Check if autonomous support is available
-                has_auto_support = False
-                for alt in config["alternatives"]:
-                    if chosen in alt["performers"]:
-                        for sc in alt["supporters"]:
-                            sc_type = agent_types.get(sc.rstrip("*"), sc)
-                            if sc_type != "human" and sc in df.columns:
-                                sval = str(row.get(sc, "") or "").strip().lower()
-                                if sval in VALID_COLORS and sval != "red":
-                                    has_auto_support = True
-                weights.append(0.5 if has_auto_support else 0.0)
-            else:
-                weights.append(0.0)
+                if not is_full_support:
+                    w_mins.append(1.0)
+                    w_maxs.append(1.0)
+                else:
+                    # Look for human supporters in the same alternative
+                    has_mandatory = False
+                    has_optional = False
+                    for alt in config["alternatives"]:
+                        if chosen in alt["performers"]:
+                            for sup_col in alt["supporters"]:
+                                sup_type = agent_types.get(sup_col.rstrip("*"), "autonomous")
+                                if sup_type == "human" and sup_col in df.columns:
+                                    sval = str(row.get(sup_col, "") or "").strip().lower()
+                                    if sval in VALID_COLORS and sval != "red":
+                                        if sval == "orange":
+                                            has_mandatory = True
+                                        else:
+                                            has_optional = True
+                    if has_mandatory:
+                        w_mins.append(0.75)
+                        w_maxs.append(0.75)
+                    elif has_optional:
+                        w_mins.append(0.75)
+                        w_maxs.append(1.0)
+                    else:
+                        w_mins.append(1.0)
+                        w_maxs.append(1.0)
 
-        pk = sum(weights) / Tk
-        category_scores[cat] = pk
+            else:  # human performer
+                if not is_full_support:
+                    w_mins.append(0.0)
+                    w_maxs.append(0.0)
+                else:
+                    if chosen_val == "orange":
+                        # Mandatory support
+                        w_mins.append(0.5)
+                        w_maxs.append(0.5)
+                    else:
+                        # Check for autonomous supporters
+                        has_auto_support = False
+                        for alt in config["alternatives"]:
+                            if chosen in alt["performers"]:
+                                for sup_col in alt["supporters"]:
+                                    sup_type = agent_types.get(sup_col.rstrip("*"), "autonomous")
+                                    if sup_type != "human" and sup_col in df.columns:
+                                        sval = str(row.get(sup_col, "") or "").strip().lower()
+                                        if sval in VALID_COLORS and sval != "red":
+                                            has_auto_support = True
+                        if has_auto_support:
+                            w_mins.append(0.0)
+                            w_maxs.append(0.5)
+                        else:
+                            w_mins.append(0.0)
+                            w_maxs.append(0.0)
 
-    P = sum(category_scores.values()) / K if K > 0 else 0.0
-    return P, category_scores
+        pk_min = sum(w_mins) / Tk
+        pk_max = sum(w_maxs) / Tk
+        category_scores[cat] = (pk_min, pk_max)
+
+    P_min = sum(v[0] for v in category_scores.values()) / K if K > 0 else 0.0
+    P_max = sum(v[1] for v in category_scores.values()) / K if K > 0 else 0.0
+    return P_min, P_max, category_scores
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1384,6 +1560,7 @@ app.layout = html.Div([
     dcc.Store(id="category-overrides-store", data={}),
     dcc.Store(id="base-figure-store", data=None),
     dcc.Store(id="arrow-indices-store", data=None),
+    dcc.Store(id="pending-csv-store", data=None),
 
     # ═══════════════════════════════════════════════════════════════════════
     # STICKY NAVIGATION HEADER
@@ -1442,7 +1619,7 @@ app.layout = html.Div([
             ),
             html.Div([
                 html.Button(
-                    "Load Example (IA_V7.csv)",
+                    "Load Example (IA_V8.csv)",
                     id="load-example-button",
                     n_clicks=0,
                     style={"marginTop": "8px", "fontSize": "13px"},
@@ -1453,6 +1630,55 @@ app.layout = html.Div([
                 ),
             ]),
             html.Div(id="upload-status", style={"marginTop": "10px", "fontStyle": "italic"}),
+
+            # ── Hierarchy configuration panel (shown after CSV upload) ──
+            html.Div(id="hierarchy-config-section", style=HIDE, children=[
+                html.H4("Configure Hierarchy Levels",
+                        style={"marginTop": "18px", "textTransform": "uppercase",
+                               "letterSpacing": "0.04em", "fontSize": "13px", "color": INK_MUTED}),
+                html.P(
+                    "Select 1–4 columns that form the hierarchical decomposition of tasks, "
+                    "from the broadest grouping (Level 1) down to the task level (last active level). "
+                    "Auto-detected values are pre-filled — adjust if needed.",
+                    style={"fontSize": "13px"},
+                ),
+                html.Div([
+                    html.Div([
+                        html.Label("Level 1 (broadest):",
+                                   style={"fontWeight": "bold", "fontSize": "12px", "display": "block"}),
+                        dcc.Dropdown(id="hier-level-1", options=[], value=None, clearable=True,
+                                     placeholder="e.g. Phase, Procedure",
+                                     style={"fontSize": "13px"}),
+                    ], style={"flex": "1", "marginRight": "8px"}),
+                    html.Div([
+                        html.Label("Level 2:",
+                                   style={"fontWeight": "bold", "fontSize": "12px", "display": "block"}),
+                        dcc.Dropdown(id="hier-level-2", options=[], value=None, clearable=True,
+                                     placeholder="e.g. Goal",
+                                     style={"fontSize": "13px"}),
+                    ], style={"flex": "1", "marginRight": "8px"}),
+                    html.Div([
+                        html.Label("Level 3:",
+                                   style={"fontWeight": "bold", "fontSize": "12px", "display": "block"}),
+                        dcc.Dropdown(id="hier-level-3", options=[], value=None, clearable=True,
+                                     placeholder="e.g. Subgoal",
+                                     style={"fontSize": "13px"}),
+                    ], style={"flex": "1", "marginRight": "8px"}),
+                    html.Div([
+                        html.Label("Level 4 (task level):",
+                                   style={"fontWeight": "bold", "fontSize": "12px", "display": "block"}),
+                        dcc.Dropdown(id="hier-level-4", options=[], value=None, clearable=True,
+                                     placeholder="e.g. Required capacity",
+                                     style={"fontSize": "13px"}),
+                    ], style={"flex": "1"}),
+                ], style={"display": "flex", "gap": "8px", "marginBottom": "14px"}),
+                html.Button(
+                    "Load with this hierarchy",
+                    id="confirm-hierarchy-button",
+                    n_clicks=0,
+                    className="btn-primary",
+                ),
+            ]),
         ]),
 
         # ── Option 2: Manual Setup ──
@@ -1638,6 +1864,14 @@ app.layout = html.Div([
                         dcc.Download(id="download-csv"),
                     ], style={"marginLeft": "auto"}),
                 ], style={"display": "flex", "width": "100%"}),
+                # Export row
+                html.Div([
+                    html.Button("Copy as Rich Text", id="copy-markdown-button", n_clicks=0),
+                    html.Button("Export PNG", id="export-table-png-button", n_clicks=0),
+                    dcc.Download(id="download-table-png"),
+                    html.Span(id="copy-markdown-status",
+                              style={"marginLeft": "12px", "fontStyle": "italic", "fontSize": "13px"}),
+                ], style={"display": "flex", "gap": "10px", "alignItems": "center", "marginTop": "8px"}),
                 html.Div(id="save-confirmation", style={"marginTop": "10px", "fontStyle": "italic"}),
             ]),
         ]),
@@ -1713,6 +1947,19 @@ app.layout = html.Div([
 
             # Team alternative labels (dynamic)
             html.Div(id="alt-labels"),
+
+            # ── Choice Metrics ────────────────────────────────────────────
+            html.Div(id="choice-metrics", style={"marginTop": "20px"}),
+
+            # Workflow graph export buttons
+            html.Div([
+                html.Button("Export SVG", id="export-graph-svg-button", n_clicks=0),
+                html.Button("Export PNG", id="export-graph-png-button", n_clicks=0),
+                dcc.Download(id="download-graph-svg"),
+                dcc.Download(id="download-graph-png"),
+                html.Span(id="graph-export-status",
+                          style={"marginLeft": "12px", "fontStyle": "italic", "fontSize": "13px"}),
+            ], style={"display": "flex", "gap": "10px", "alignItems": "center", "marginTop": "12px"}),
         ]),
 
         # ── [04] Statistics ──
@@ -1720,18 +1967,28 @@ app.layout = html.Div([
             html.Div("[ 04 ]", className="section-number"),
             html.H2("Statistics", className="section-title"),
             html.Div([
-                dcc.Graph(id="allocation-type-bar-chart",  config={"displayModeBar": False}),
-                dcc.Graph(id="agent-autonomy-bar-chart",   config={"displayModeBar": False}),
-            ]),
-            html.Details([
-                html.Summary("Capacity Assessment", style={
-                    "fontSize": "1.1rem", "fontWeight": "bold", "cursor": "pointer",
-                    "padding": "0.75rem 0", "userSelect": "none",
-                    "textTransform": "uppercase", "letterSpacing": "0.04em",
-                }),
-                dcc.Graph(id="capacity-bar-chart",         config={"displayModeBar": False}),
-                dcc.Graph(id="most-reliable-bar-chart",    config={"displayModeBar": False}),
-                dcc.Graph(id="human-baseline-bar-chart",   config={"displayModeBar": False}),
+                html.Div([
+                    dcc.Graph(id="allocation-type-bar-chart", config={"displayModeBar": False}),
+                    html.Div([
+                        html.Button("Export SVG", id="export-alloc-svg-button", n_clicks=0),
+                        html.Button("Export PNG", id="export-alloc-png-button", n_clicks=0),
+                        dcc.Download(id="download-alloc-svg"),
+                        dcc.Download(id="download-alloc-png"),
+                        html.Span(id="export-alloc-status",
+                                  style={"marginLeft": "8px", "fontStyle": "italic", "fontSize": "13px"}),
+                    ], style={"display": "flex", "gap": "10px", "alignItems": "center", "marginTop": "6px"}),
+                ]),
+                html.Div([
+                    dcc.Graph(id="agent-autonomy-bar-chart", config={"displayModeBar": False}),
+                    html.Div([
+                        html.Button("Export SVG", id="export-autonomy-svg-button", n_clicks=0),
+                        html.Button("Export PNG", id="export-autonomy-png-button", n_clicks=0),
+                        dcc.Download(id="download-autonomy-svg"),
+                        dcc.Download(id="download-autonomy-png"),
+                        html.Span(id="export-autonomy-status",
+                                  style={"marginLeft": "8px", "fontStyle": "italic", "fontSize": "13px"}),
+                    ], style={"display": "flex", "gap": "10px", "alignItems": "center", "marginTop": "6px"}),
+                ]),
             ]),
         ]),
     ]),
@@ -1792,74 +2049,148 @@ def toggle_nav_links(config):
     Output("config-details", "children"),
     Output("procedure-dropdown", "options"),
     Output("upload-status", "children"),
+    # Hierarchy-panel outputs
+    Output("pending-csv-store", "data"),
+    Output("hierarchy-config-section", "style"),
+    Output("hier-level-1", "options"),
+    Output("hier-level-1", "value"),
+    Output("hier-level-2", "options"),
+    Output("hier-level-2", "value"),
+    Output("hier-level-3", "options"),
+    Output("hier-level-3", "value"),
+    Output("hier-level-4", "options"),
+    Output("hier-level-4", "value"),
     Input("setup-upload", "contents"),
     Input("create-team-button", "n_clicks"),
     Input("reset-config-button", "n_clicks"),
     Input("load-example-button", "n_clicks"),
+    Input("confirm-hierarchy-button", "n_clicks"),
     State("setup-upload", "filename"),
     State("manual-columns-input", "value"),
     State("manual-task-col-input", "value"),
     State("manual-procedure-col-input", "value"),
     State("manual-category-col-input", "value"),
+    State("pending-csv-store", "data"),
+    State("hier-level-1", "value"),
+    State("hier-level-2", "value"),
+    State("hier-level-3", "value"),
+    State("hier-level-4", "value"),
     prevent_initial_call=True,
 )
-def handle_setup(upload_contents, create_clicks, reset_clicks, example_clicks,
+def handle_setup(upload_contents, create_clicks, reset_clicks, example_clicks, confirm_clicks,
                  upload_filename, manual_columns, manual_task_col,
-                 manual_procedure_col, manual_category_col):
+                 manual_procedure_col, manual_category_col,
+                 pending_csv, hier_l1, hier_l2, hier_l3, hier_l4):
     ctx = callback_context
     triggered = ctx.triggered[0]["prop_id"].split(".")[0]
     no = dash.no_update
+    # 18 outputs: 8 core + pending-csv-store + hierarchy-section + 4*(options+value)
+    _no18 = (no,) * 18
+
+    def _hide_hier():
+        """Return the 10 hierarchy-panel outputs that hide/clear the panel."""
+        return None, HIDE, [], None, [], None, [], None, [], None
 
     if triggered == "reset-config-button":
-        return None, None, HIDE, SHOW, HIDE, None, [], ""
+        return (None, None, HIDE, SHOW, HIDE, None, [], "") + _hide_hier()
 
     if triggered == "load-example-button":
         if EXAMPLE_CSV is None:
-            return no, no, no, no, no, no, no, "⚠️ Example file not found."
+            return (no, no, no, no, no, no, no, "⚠️ Example file not found.") + _hide_hier()
         try:
             df = pd.read_csv(EXAMPLE_CSV)
         except Exception as e:
-            return no, no, no, no, no, no, no, f"⚠️ Error reading example: {e}"
+            return (no, no, no, no, no, no, no, f"⚠️ Error reading example: {e}") + _hide_hier()
         config = detect_team_config(df)
         if config is None:
-            return no, no, no, no, no, no, no, "⚠️ Could not detect team structure in example."
+            return (no, no, no, no, no, no, no, "⚠️ Could not detect team structure in example.") + _hide_hier()
         if "Row" not in df.columns:
             df.insert(0, "Row", range(1, len(df) + 1))
             config["all_columns"] = ["Row"] + [c for c in config["all_columns"] if c != "Row"]
         proc_col = config.get("procedure_column", "Procedure")
-        proc_options = []
-        if proc_col in df.columns:
-            proc_options = [{"label": p, "value": p} for p in df[proc_col].dropna().unique()]
+        proc_options = [{"label": p, "value": p} for p in df[proc_col].dropna().unique()] if proc_col in df.columns else []
         table = build_data_table(df, config)
         summary = config_summary_html(config)
-        return config, table, SHOW, HIDE, SHOW, summary, proc_options, "✅ Loaded example: IA_V7.csv"
+        return (config, table, SHOW, HIDE, SHOW, summary, proc_options, "✅ Loaded example: IA_V8.csv") + _hide_hier()
 
     if triggered == "setup-upload" and upload_contents:
+        # Step 1: parse CSV, auto-detect hierarchy, show the panel for user to confirm/adjust
         try:
             content_type, content_string = upload_contents.split(",")
             decoded = base64.b64decode(content_string)
             df = pd.read_csv(io.StringIO(decoded.decode("utf-8")))
         except Exception as e:
-            return no, no, no, no, no, no, no, f"⚠️ Error reading file: {e}"
+            return (no, no, no, no, no, no, no, f"⚠️ Error reading file: {e}") + _hide_hier()
 
         config = detect_team_config(df)
         if config is None:
-            return no, no, no, no, no, no, no, "⚠️ Could not detect team structure. No color columns found."
+            return (no, no, no, no, no, no, no, "⚠️ Could not detect team structure. No color columns found.") + _hide_hier()
+
+        # Build dropdown options from all non-color, non-Row columns
+        color_set = set(config.get("color_columns", []))
+        candidate_cols = [c for c in df.columns if c != "Row" and c not in color_set]
+        options = [{"label": c, "value": c} for c in candidate_cols]
+
+        hier = config.get("hierarchy_columns", [])
+        v1 = hier[0] if len(hier) > 0 else None
+        v2 = hier[1] if len(hier) > 1 else None
+        v3 = hier[2] if len(hier) > 2 else None
+        v4 = hier[3] if len(hier) > 3 else None
+
+        n_hier = len(hier)
+        pending = {"content": content_string, "filename": upload_filename or "file.csv"}
+        status = (
+            f"✅ {upload_filename} — detected {n_hier} hierarchy level(s): "
+            f"{', '.join(hier)}. Adjust below if needed, then click Load."
+        )
+        return (
+            no, no, no, no, no, no, no, status,
+            pending, SHOW,
+            options, v1, options, v2, options, v3, options, v4,
+        )
+
+    if triggered == "confirm-hierarchy-button":
+        # Step 2: decode pending CSV, override hierarchy, build table
+        if not pending_csv:
+            return _no18
+        try:
+            decoded = base64.b64decode(pending_csv["content"])
+            df = pd.read_csv(io.StringIO(decoded.decode("utf-8")))
+        except Exception as e:
+            return (no, no, no, no, no, no, no, f"⚠️ Error reading pending file: {e}") + (no,) * 10
+
+        config = detect_team_config(df)
+        if config is None:
+            return (no, no, no, no, no, no, no, "⚠️ Could not detect team structure.") + (no,) * 10
+
+        # Override hierarchy with user-selected levels
+        selected_hier = [l for l in [hier_l1, hier_l2, hier_l3, hier_l4] if l]
+        if selected_hier:
+            config["hierarchy_columns"] = selected_hier
+            config["procedure_column"] = selected_hier[0]
+            config["task_column"] = selected_hier[-1]
+            # Recompute metadata (exclude selected hierarchy from metadata)
+            color_set = set(config["color_columns"])
+            structural = {"Row"} | set(selected_hier)
+            if config.get("category_column"):
+                structural.add(config["category_column"])
+            config["metadata_columns"] = [
+                c for c in df.columns if c not in structural and c not in color_set
+            ]
 
         # Ensure Row column
         if "Row" not in df.columns:
             df.insert(0, "Row", range(1, len(df) + 1))
             config["all_columns"] = ["Row"] + [c for c in config["all_columns"] if c != "Row"]
 
-        # Procedure dropdown options
         proc_col = config.get("procedure_column", "Procedure")
-        proc_options = []
-        if proc_col in df.columns:
-            proc_options = [{"label": p, "value": p} for p in df[proc_col].dropna().unique()]
-
+        proc_options = [{"label": p, "value": p} for p in df[proc_col].dropna().unique()] if proc_col in df.columns else []
         table = build_data_table(df, config)
         summary = config_summary_html(config)
-        return config, table, SHOW, HIDE, SHOW, summary, proc_options, f"✅ Loaded {upload_filename}"
+        filename = pending_csv.get("filename", "file.csv")
+        return (
+            config, table, SHOW, HIDE, SHOW, summary, proc_options, f"✅ Loaded {filename}",
+        ) + _hide_hier()
 
     if triggered == "create-team-button":
         config = build_config_from_manual(
@@ -1869,13 +2200,15 @@ def handle_setup(upload_contents, create_clicks, reset_clicks, example_clicks,
             category_col=manual_category_col.strip() or None if manual_category_col else None,
         )
         if config is None:
-            return no, no, no, no, no, no, no, no
+            return _no18
         df = create_empty_df(config)
         table = build_data_table(df, config)
         summary = config_summary_html(config)
-        return config, table, SHOW, HIDE, SHOW, summary, [], ""
+        return (config, table, SHOW, HIDE, SHOW, summary, [], "") + _hide_hier()
 
-    return no, no, no, no, no, no, no, no
+    return _no18
+
+
 
 
 # ── Table operations callback ────────────────────────────────────────────────
@@ -2046,9 +2379,6 @@ def apply_highlighting_callback(base_fig_dict, arrow_info, highlight_track,
 
 # ── Bar chart callback ────────────────────────────────────────────────────────
 @app.callback(
-    Output("capacity-bar-chart", "figure"),
-    Output("most-reliable-bar-chart", "figure"),
-    Output("human-baseline-bar-chart", "figure"),
     Output("allocation-type-bar-chart", "figure"),
     Output("agent-autonomy-bar-chart", "figure"),
     Input("procedure-dropdown", "value"),
@@ -2057,7 +2387,7 @@ def apply_highlighting_callback(base_fig_dict, arrow_info, highlight_track,
 )
 def update_bar_charts(procedure, data, config):
     if not data or not config:
-        return go.Figure(), go.Figure(), go.Figure(), go.Figure(), go.Figure()
+        return go.Figure(), go.Figure()
 
     df = pd.DataFrame(data)
     proc_col = config.get("procedure_column", "Procedure")
@@ -2065,9 +2395,6 @@ def update_bar_charts(procedure, data, config):
         df = df[df[proc_col] == procedure]
 
     return (
-        build_capacity_bar_chart(df, config),
-        build_most_reliable_bar_chart(df, config),
-        build_human_baseline_bar_chart(df, config),
         build_allocation_bar_chart(df, config),
         build_autonomy_bar_chart(df, config),
     )
@@ -2099,17 +2426,20 @@ def compute_automation_proportion(highlight_track, category_overrides, procedure
     if cat_col not in df.columns or not highlight_track or highlight_track == "none":
         return {"display": "none"}, "--", {}, "", None
 
-    P, cat_scores = compute_automation_proportion_data(
+    P_min, P_max, cat_scores = compute_automation_proportion_data(
         df, config, highlight_track, category_overrides or {},
     )
 
-    if P is None:
+    if P_min is None:
         return {"display": "none"}, "--", {}, "", None
 
-    # Color code: accent if P > 0.5, green if P < 0.5, yellow if P ≈ 0.5
-    if P > 0.55:
+    is_range = abs(P_max - P_min) > 1e-6
+
+    # Color-code using midpoint
+    P_mid = (P_min + P_max) / 2
+    if P_mid > 0.55:
         color = ACCENT
-    elif P < 0.45:
+    elif P_mid < 0.45:
         color = PAL_GREEN
     else:
         color = PAL_YELLOW
@@ -2117,8 +2447,19 @@ def compute_automation_proportion(highlight_track, category_overrides, procedure
     val_style = {"fontSize": "20px", "fontWeight": "bold", "color": color}
     box_style = {"textAlign": "center", "marginTop": "10px"}
 
-    # Category detail
-    detail_parts = [f"{cat}: {score:.2f}" for cat, score in sorted(cat_scores.items())]
+    # Summary value: range or single
+    if is_range:
+        summary_text = f"{P_min:.3f} – {P_max:.3f}"
+    else:
+        summary_text = f"{P_min:.3f}"
+
+    # Category detail with ranges
+    detail_parts = []
+    for cat, (pk_min, pk_max) in sorted(cat_scores.items()):
+        if abs(pk_max - pk_min) > 1e-6:
+            detail_parts.append(f"{cat}: {pk_min:.2f}–{pk_max:.2f}")
+        else:
+            detail_parts.append(f"{cat}: {pk_min:.2f}")
     detail_text = " | ".join(detail_parts) if detail_parts else ""
 
     # Extract performer names for formula explanation
@@ -2129,23 +2470,41 @@ def compute_automation_proportion(highlight_track, category_overrides, procedure
     alt1_name = _perf_name(alts[0]) if len(alts) > 0 else "Alt 1 performer"
     alt2_name = _perf_name(alts[1]) if len(alts) > 1 else "Alt 2 performer"
 
-    # LaTeX formula display
+    sum_min = sum(v[0] for v in cat_scores.values())
+    sum_max = sum(v[1] for v in cat_scores.values())
+    K = len(cat_scores)
+
+    if is_range:
+        formula_p = (
+            f"P = (1/K) × Σ pₖ = (1/{K}) × [{sum_min:.2f}, {sum_max:.2f}] "
+            f"= [{P_min:.3f}, {P_max:.3f}]"
+        )
+    else:
+        formula_p = (
+            f"P = (1/K) × Σ pₖ = (1/{K}) × {sum_min:.2f} = {P_min:.3f}"
+        )
+
     formula = html.Div([
         html.P([
-            html.B("Formula: "),
-            f"P = (1/K) × Σ pₖ = (1/{len(cat_scores)}) × "
-            f"{sum(cat_scores.values()):.2f} = {P:.3f}",
+            html.B("Formula: "), formula_p,
         ], style={"fontSize": "13px", "marginTop": "5px"}),
         html.P([
             html.B("Where: "),
-            f"w(t) = 0.0 ({alt1_name} independent), "
-            f"0.5 ({alt1_name} interdependent — supported by autonomous), "
-            f"0.75 ({alt1_name} as supporter), "
-            f"1.0 ({alt2_name} independent)",
+            f"w(t) = 0.0 ({alt1_name} alone), "
+            f"[0.0, 0.5] ({alt1_name} with optional auto-support), "
+            f"0.5 ({alt1_name} with mandatory support), "
+            f"[0.75, 1.0] ({alt2_name} with optional human-support), "
+            f"0.75 ({alt2_name} with mandatory human-support), "
+            f"1.0 ({alt2_name} alone)",
         ], style={"fontSize": "12px"}),
+        html.P(
+            "Range shown when support is opportunistic (green/yellow); "
+            "orange performers/supporters indicate mandatory support (fixed value).",
+            style={"fontSize": "11px", "color": INK_MUTED, "marginTop": "4px"},
+        ),
     ])
 
-    return box_style, f"{P:.3f}", val_style, detail_text, formula
+    return box_style, summary_text, val_style, detail_text, formula
 
 
 # ── Dynamic highlight-selector labels ─────────────────────────────────────────
@@ -2354,7 +2713,7 @@ def show_category_override_warning(highlight_value):
     """Show a warning when no highlight track is selected."""
     if not highlight_value or highlight_value == "none":
         return (
-            "⚠ Select a highlight strategy first. Automation proportion requires a track "
+            "Select a highlight strategy first. Automation proportion requires a track "
             "to compute against — pick a highlight above, or specify every category manually."
         )
     return ""
@@ -2373,6 +2732,380 @@ def collect_category_overrides(values, ids):
         if value != "default":
             overrides[id_dict["category"]] = value
     return overrides
+
+
+# ── Choice Metrics callback ───────────────────────────────────────────────────
+@app.callback(
+    Output("choice-metrics", "children"),
+    Input("responsibility-table", "data"),
+    Input("procedure-dropdown", "value"),
+    State("team-config-store", "data"),
+)
+def compute_choice_metrics(data, procedure, config):
+    """
+    For each task: count the number of valid (non-red) performer columns.
+    A task with exactly 1 performer has no choice to make (it's forced).
+    A task with N >= 2 performers offers N choices.
+
+    Individual choices = sum of performer counts for tasks where count >= 2.
+    Combinations       = product of performer counts across all tasks (each
+                         forced task contributes factor 1, so it's excluded
+                         from the product automatically).
+    """
+    if not data or not config:
+        return None
+
+    df = pd.DataFrame(data)
+    proc_col = config.get("procedure_column", "Procedure")
+    if procedure and proc_col in df.columns:
+        df = df[df[proc_col] == procedure]
+
+    if df.empty:
+        return None
+
+    performer_cols = get_performer_columns(config)
+
+    # performer_count[i] = number of valid (non-red) performers for task i
+    performer_count = []
+    for _, row in df.iterrows():
+        n = sum(
+            1 for pc in performer_cols
+            if pc in df.columns
+            and str(row.get(pc, "") or "").strip().lower() in ("green", "yellow", "orange")
+        )
+        performer_count.append(n)
+
+    total_tasks = len(performer_count)
+
+    # Only tasks with >= 2 options involve an actual choice
+    total_individual = sum(n for n in performer_count if n >= 2)
+
+    # Product: only tasks with >= 2 options expand the combination space
+    product = 1
+    for n in performer_count:
+        if n >= 2:
+            product *= n
+
+    # Distribution buckets:
+    #   0 performers  → unassigned (no performer available)
+    #   1 performer   → forced (no choice)
+    #   N >= 2        → N choices
+    from collections import Counter
+    dist = Counter(performer_count)
+    dist_items = sorted(dist.items())  # [(n_performers, n_tasks), ...]
+
+    # Format the combination count
+    import math
+    if product > 1e15:
+        combo_display = f"{product:.3e}"
+        combo_sub = f"(log₁₀ = {math.log10(product):.1f})"
+    else:
+        combo_display = f"{product:,}"
+        combo_sub = ""
+
+    # Distribution cells
+    dist_cells = []
+    for n_perf, n_tasks in dist_items:
+        if n_perf == 0:
+            label = "no performer"
+            color = ACCENT
+        elif n_perf == 1:
+            label = "forced (1 performer)"
+            color = INK_MUTED
+        else:
+            label = f"{n_perf} choices"
+            color = PAL_ORANGE if n_perf == 2 else PAL_GREEN
+        dist_cells.append(html.Div([
+            html.Span(str(n_tasks),
+                      style={"fontSize": "22px", "fontWeight": "bold", "color": color}),
+            html.Br(),
+            html.Span(f"task{'s' if n_tasks != 1 else ''} — {label}",
+                      style={"fontSize": "11px", "color": INK_MUTED}),
+        ], style={
+            "textAlign": "center", "minWidth": "120px",
+            "borderRight": f"1px solid {BORDER}", "padding": "0 18px",
+        }))
+
+    return html.Div([
+        html.Div("Allocation Choices", style={
+            "fontSize": "11px", "fontWeight": "bold", "letterSpacing": "0.06em",
+            "textTransform": "uppercase", "color": INK_MUTED, "marginBottom": "10px",
+        }),
+        html.Div([
+            # Big metrics
+            html.Div([
+                html.Span(str(total_individual),
+                          style={"fontSize": "28px", "fontWeight": "bold", "color": INK}),
+                html.Br(),
+                html.Span("individual choices",
+                          style={"fontSize": "11px", "color": INK_MUTED}),
+            ], style={"textAlign": "center", "minWidth": "130px",
+                      "borderRight": f"1px solid {BORDER}", "padding": "0 18px"}),
+
+            html.Div([
+                html.Span(combo_display,
+                          style={"fontSize": "28px", "fontWeight": "bold", "color": INK}),
+                html.Br(),
+                html.Span("total combinations",
+                          style={"fontSize": "11px", "color": INK_MUTED}),
+                html.Br() if combo_sub else None,
+                html.Span(combo_sub,
+                          style={"fontSize": "10px", "color": INK_MUTED}) if combo_sub else None,
+            ], style={"textAlign": "center", "minWidth": "140px",
+                      "borderRight": f"1px solid {BORDER}", "padding": "0 18px"}),
+
+            html.Div([
+                html.Span(str(total_tasks),
+                          style={"fontSize": "28px", "fontWeight": "bold", "color": INK}),
+                html.Br(),
+                html.Span("tasks",
+                          style={"fontSize": "11px", "color": INK_MUTED}),
+            ], style={"textAlign": "center", "minWidth": "80px",
+                      "borderRight": f"1px solid {BORDER}", "padding": "0 18px"}),
+
+            # Per-choice-count distribution
+            *dist_cells,
+        ], style={
+            "display": "flex", "alignItems": "center", "flexWrap": "wrap",
+            "gap": "4px",
+        }),
+    ], style={
+        "backgroundColor": SURFACE,
+        "border": f"1px solid {BORDER}",
+        "borderLeft": f"4px solid {INK}",
+        "padding": "14px 20px",
+        "borderRadius": "3px",
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EXPORT CALLBACKS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Table: Export PNG (server-side via kaleido) ───────────────────────────────
+@app.callback(
+    Output("download-table-png", "data"),
+    Input("export-table-png-button", "n_clicks"),
+    State("responsibility-table", "data"),
+    State("responsibility-table", "hidden_columns"),
+    State("team-config-store", "data"),
+    prevent_initial_call=True,
+)
+def export_table_png(n_clicks, data, hidden_columns, config):
+    if not n_clicks or not data or not config:
+        return dash.no_update
+    import plotly.io as pio
+
+    df = pd.DataFrame(data)
+    agent_cols = set(get_agent_columns(config))
+
+    # Fixed export columns: all hierarchy levels + agent cols + teaming requirements
+    hier_cols = config.get("hierarchy_columns", [
+        config.get("procedure_column", "Procedure"),
+        config.get("task_column", "Task Object"),
+    ])
+    TEAMING_COLS = ["Observability", "Predictability", "Directability"]
+
+    all_cols = config.get("all_columns", [])
+    export_cols = (
+        [c for c in hier_cols if c in df.columns]
+        + ([config.get("category_column")] if config.get("category_column") and config["category_column"] in df.columns else [])
+        + [c for c in all_cols if c in agent_cols and c in df.columns]
+        + [c for c in TEAMING_COLS if c in df.columns]
+    )
+    # Fallback if nothing matched
+    if not export_cols:
+        export_cols = [c for c in df.columns]
+
+    visible_cols = export_cols
+    df_vis = df[visible_cols]
+
+    # Per-cell background colors (list-of-columns → list-of-rows)
+    cell_bg = []
+    cell_fg = []
+    for col in visible_cols:
+        bg_col, fg_col = [], []
+        for _, row in df_vis.iterrows():
+            if col in agent_cols:
+                val = str(row.get(col, "") or "").strip().lower()
+                bg = COLOR_MAP.get(val, BG) if val in VALID_COLORS else BG
+                fg = BG if val in ("red", "orange", "green") else INK
+            else:
+                bg, fg = BG, INK
+            bg_col.append(bg)
+            fg_col.append(fg)
+        cell_bg.append(bg_col)
+        cell_fg.append(fg_col)
+
+    fig = go.Figure(go.Table(
+        header=dict(
+            values=["<b>" + c + "</b>" for c in visible_cols],
+            fill_color=INK,
+            font=dict(color=BG, size=11, family="Arial, sans-serif"),
+            align="center",
+            height=30,
+        ),
+        cells=dict(
+            values=[df_vis[col].tolist() for col in visible_cols],
+            fill_color=cell_bg,
+            font=dict(color=cell_fg, size=10, family="Arial, sans-serif"),
+            align="left",
+            height=25,
+        ),
+    ))
+    n_rows = len(df_vis)
+    n_cols = len(visible_cols)
+    col_w = max(60, 1400 // max(n_cols, 1))
+    width = min(max(800, n_cols * col_w), 2600)
+    height = max(300, 50 + n_rows * 28)
+    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor=BG,
+                      width=width, height=height)
+    img_bytes = pio.to_image(fig, format="png", width=width, height=height)
+    return dcc.send_bytes(img_bytes, "interdependence_analysis.png")
+
+
+# ── Table: Copy as Markdown (clientside) ─────────────────────────────────────
+app.clientside_callback(
+    """
+    function(n_clicks, data, columns, hidden_cols) {
+        if (!n_clicks || !data || !columns) return '';
+        var hiddenSet = {};
+        (hidden_cols || []).forEach(function(h) { hiddenSet[h] = true; });
+        var visCols = columns.filter(function(c) { return !hiddenSet[c.id]; });
+        var colNames = visCols.map(function(c) {
+            var n = c.name;
+            return Array.isArray(n) ? n[n.length - 1] : String(n);
+        });
+        var colIds = visCols.map(function(c) { return c.id; });
+        var lines = [
+            '| ' + colNames.join(' | ') + ' |',
+            '| ' + colNames.map(function() { return '---'; }).join(' | ') + ' |'
+        ];
+        data.forEach(function(row) {
+            var cells = colIds.map(function(id) {
+                var v = row[id];
+                return v == null ? '' : String(v).replace(/\\|/g, '\\\\|');
+            });
+            lines.push('| ' + cells.join(' | ') + ' |');
+        });
+        var md = lines.join('\\n');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(md);
+        } else {
+            var ta = document.createElement('textarea');
+            ta.value = md; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            document.execCommand('copy'); document.body.removeChild(ta);
+        }
+        return 'Copied to clipboard!';
+    }
+    """,
+    Output("copy-markdown-status", "children"),
+    Input("copy-markdown-button", "n_clicks"),
+    State("responsibility-table", "data"),
+    State("responsibility-table", "columns"),
+    State("responsibility-table", "hidden_columns"),
+    prevent_initial_call=True,
+)
+
+# ── Workflow Graph: Export SVG (server-side via kaleido) ─────────────────────
+@app.callback(
+    Output("download-graph-svg", "data"),
+    Output("graph-export-status", "children"),
+    Input("export-graph-svg-button", "n_clicks"),
+    State("interdependence-graph", "figure"),
+    prevent_initial_call=True,
+)
+def export_graph_svg(n_clicks, figure):
+    if not n_clicks or not figure:
+        return dash.no_update, dash.no_update
+    import plotly.io as pio
+    fig = go.Figure(figure)
+    svg_bytes = pio.to_image(fig, format="svg", width=1400, height=900)
+    return dcc.send_bytes(svg_bytes, "workflow_graph.svg"), ""
+
+
+# ── Workflow Graph: Export PNG (server-side via kaleido) ─────────────────────
+@app.callback(
+    Output("download-graph-png", "data"),
+    Output("graph-export-status", "children", allow_duplicate=True),
+    Input("export-graph-png-button", "n_clicks"),
+    State("interdependence-graph", "figure"),
+    prevent_initial_call=True,
+)
+def export_graph_png(n_clicks, figure):
+    if not n_clicks or not figure:
+        return dash.no_update, dash.no_update
+    import plotly.io as pio
+    fig = go.Figure(figure)
+    png_bytes = pio.to_image(fig, format="png", width=1400, height=900, scale=2)
+    return dcc.send_bytes(png_bytes, "workflow_graph.png"), ""
+
+
+# ── Statistics: Allocation chart export (server-side via kaleido) ─────────────
+@app.callback(
+    Output("download-alloc-svg", "data"),
+    Output("export-alloc-status", "children"),
+    Input("export-alloc-svg-button", "n_clicks"),
+    State("allocation-type-bar-chart", "figure"),
+    prevent_initial_call=True,
+)
+def export_alloc_svg(n_clicks, figure):
+    if not n_clicks or not figure:
+        return dash.no_update, dash.no_update
+    import plotly.io as pio
+    fig = go.Figure(figure)
+    svg_bytes = pio.to_image(fig, format="svg", width=1000, height=600)
+    return dcc.send_bytes(svg_bytes, "task_type_distribution.svg"), ""
+
+
+@app.callback(
+    Output("download-alloc-png", "data"),
+    Output("export-alloc-status", "children", allow_duplicate=True),
+    Input("export-alloc-png-button", "n_clicks"),
+    State("allocation-type-bar-chart", "figure"),
+    prevent_initial_call=True,
+)
+def export_alloc_png(n_clicks, figure):
+    if not n_clicks or not figure:
+        return dash.no_update, dash.no_update
+    import plotly.io as pio
+    fig = go.Figure(figure)
+    png_bytes = pio.to_image(fig, format="png", width=1000, height=600, scale=2)
+    return dcc.send_bytes(png_bytes, "task_type_distribution.png"), ""
+
+
+# ── Statistics: Autonomy chart export (server-side via kaleido) ───────────────
+@app.callback(
+    Output("download-autonomy-svg", "data"),
+    Output("export-autonomy-status", "children"),
+    Input("export-autonomy-svg-button", "n_clicks"),
+    State("agent-autonomy-bar-chart", "figure"),
+    prevent_initial_call=True,
+)
+def export_autonomy_svg(n_clicks, figure):
+    if not n_clicks or not figure:
+        return dash.no_update, dash.no_update
+    import plotly.io as pio
+    fig = go.Figure(figure)
+    svg_bytes = pio.to_image(fig, format="svg", width=1000, height=600)
+    return dcc.send_bytes(svg_bytes, "agent_autonomy.svg"), ""
+
+
+@app.callback(
+    Output("download-autonomy-png", "data"),
+    Output("export-autonomy-status", "children", allow_duplicate=True),
+    Input("export-autonomy-png-button", "n_clicks"),
+    State("agent-autonomy-bar-chart", "figure"),
+    prevent_initial_call=True,
+)
+def export_autonomy_png(n_clicks, figure):
+    if not n_clicks or not figure:
+        return dash.no_update, dash.no_update
+    import plotly.io as pio
+    fig = go.Figure(figure)
+    png_bytes = pio.to_image(fig, format="png", width=1000, height=600, scale=2)
+    return dcc.send_bytes(png_bytes, "agent_autonomy.png"), ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
