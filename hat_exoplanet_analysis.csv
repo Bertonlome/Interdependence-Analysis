@@ -1,13 +1,3 @@
-Row,Procedure,Task,Human*,UGV,UAV,UGV*,UAV*,Human,Observability,Predictability,Directability
-1,Placing the base,Observe the map,green,red,red,red,red,red,,,
-2,Placing the base,Select landing coordinates,yellow,red,red,red,red,red,,,
-3,Placing the base,Deploy Base,green,red,red,red,red,red,,,
-4,Deploying the robots,Choose a robot to deploy,green,red,red,red,red,red,,,
-5,Deploying the robots,Deploy the robot,green,green,green,red,red,green,The robot must display where they can/cannot be deployed (v),The player must be able to predict when the robot will be deployed (instantaneous),The player must be able to direct where the robot will be deployed (v)
-6,Planning the mission,Decide a course of action,yellow,red,red,red,red,red,,,
-7,Selection,Select a robot,green,red,red,red,red,red,The robot must display when it is selected/not selected (v),,
-8,Selection,Select a destination,green,red,red,red,red,red,,,
-9,Planning the action,Plan path,yellow,green,green,yellow,yellow,yellow,The robot and the player should be able to see the projected path on the map (v),The player should be able to predict the future positions of the robot (v),The player (v) and the robot (x) should be able to modify the path
 10,Planning the action,Ensure each step of the path is movable,yellow,yellow,yellow,yellow,green,yellow,The player must be able to access the robot's camera feed to assess that the path is movable  (v),The player must be able to predict the capacity to move of each robot (x),The player should be able help to the robot identifying non-movable tiles (x)
 11,Planning the action,Optimize path for minimizing distance,yellow,green,green,green,green,red,The robot and the player should be able to see the projected path on the map (v),,The player (v) and the robot (x) should be able to modify the path
 12,Execute the action,Execute steps of the path,red,red,red,green,green,red,The player should be able to see the robot's location on the map (v),"The time to execute a footstep, and future position must be predictable for the player (x)",The player should be able to instruct the robot to take a single step (v)
@@ -17,34 +7,66 @@ Row,Procedure,Task,Human*,UGV,UAV,UGV*,UAV*,Human,Observability,Predictability,D
 16,Execute the action,Move over grass,red,red,red,green,green,red,,,
 17,Execute the action,Move over mud,red,red,red,yellow,green,red,,,
 18,Execute the action,Move over bushes,red,red,red,red,green,red,,,
-19,Execute the action,Move through forest,red,red,red,green,red,red,,,
 20,Execute the action,Move over rocks,red,red,red,red,green,red,,,
 21,Execute the action,Sense a robot that can be lifted,green,red,red,red,green,red,The UAV should display when it is able to lift a UGV (v),,
-22,Execute the action,Decide to lift a robot,green,red,red,red,red,red,,,The player should be able to direct the UAV to lift the UGV (v)
-23,Execute the action,Lift a robot,red,red,red,orange,orange,red,"The UAV should display when it is lifting a UGV, the UGV should display when it is being lifted (v)",The player must be able to predict movable terrain in lifting mode (x),
 24,Execute the action,Move over water,red,red,red,orange,green,red,,,The UAV must be able to lift the UGV over water (v)
 25,Execute the action,Climb a cliff,red,red,red,orange,green,red,,,The UAV must be able to lift the UGV over cliffs (v)
-26,Execute the action,Decide to place a bridge,green,green,red,green,red,yellow,The player must be able to see the amount of wood transported by the UGV to place bridges (v); The player should be able to see where the UGV plan on placing a bridge (v),The player must be able to predict the location of the bridge and when it will be placed (v),The player should be able to stop/modify the bridge plan; the player should be able to direct the UGV to place a bridge (v)
-27,Execute the action,Place a bridge,red,red,red,green,red,red,The UGV should display the possible location for placing the bridge (v),The player must be able to predict the location of the bridge (v),
 28,Execute the action,Move over a bridge,red,red,red,green,green,red,,,
 29,Manage battery,Monitor battery level,yellow,yellow,yellow,green,green,red,The robot must display battery level; the robot must alert when battery is low (v),The player should be able to predict battery depletion of the robots (x),
 30,Execute the action,Stop executing steps of the path,green,red,red,green,green,red,The robot must alert when path execution has been canceled (v),The player must be able to predict when the path will be stopped by the robots (x),The player should be able to stop the execution of the path (v)
-31,Planning the action,Decide to replan the path,green,red,red,red,red,red,,,The player should be able to send the path to the robot for execution (x)
 32,Execute the action,Return to base,red,red,red,green,green,red,,,
 33,Manage battery,Recharge battery,red,red,red,green,green,red,The robot must display when it is charging (v),The player must be able to predict when battery will be recharged (x),The player should be able to stop and resume battery charging (x)
-34,Gather resources,Sense wood/mineral in proximity,green,green,green,green,green,red,The player must be able to access the robot's camera feed to see the wood/mineral in the environment (v),,
-35,Gather resources,Recognize wood/mineral,yellow,red,red,orange,red,orange,,,The player should be able to help the robot identifying the resources (x)
-36,Gather resources,Decide to collect wood/mineral,green,red,red,red,red,red,The player should know the overall resources collected and available at base (v),,The player should be able to direct the UGV to collect resources (v)
-37,Gather resources,Collect wood/mineral,red,red,red,green,red,red,The UGV should display the type and number of resources collected (v),The player should be able to predict how much more resources the UGV can collect (v),
-38,Gather resources,Store wood/mineral,red,red,red,green,red,red,,,
-39,Gather resources,Decide to carry the resources back at the base,green,red,red,red,red,red,,,The player should be able to direct the UGV to go back at the base
-40,Gather resources,Drop wood/mineral at base,red,red,red,green,red,red,The UGV must display when the resources are dropped at the base (v),The player should be able to predict that the resources will be automatically dropped at the base when in proximity (x),The player should be able to stop the UGV from dropping resources (x)
-41,Find the monolith,Sense gravitational anomaly,green,green,green,green,green,red,The player must have access to the anomaly sensor value (v),,
-42,Find the monolith,Understand the local gravitational anomaly trends,yellow,yellow,yellow,green,green,red,The player must have access to the local anomaly trend  (v),,
-43,Find the monolith,Understand the global gravitational anomaly trend,yellow,yellow,yellow,red,red,red,The player must have access to the aggregation of the anomaly values on the map (v),,
-44,Find the monolith,Plan path to track high anomaly values,yellow,green,green,yellow,yellow,red,The player must be able to know when the robot has reached a maxima (v),,The player should be able to nudge the robot to get out of a local maxima (v)
-45,Manage stuck robot,Detect robot stuck,yellow,yellow,red,green,red,red,The stuck robot should send an alert (v),,
-46,Manage stuck robot,Decide to send a rescue robot,green,red,red,red,red,red,The player should know which robot are capable of rescuing the stuck robot (x) ; the player should know which robot is available (v),,The player should be able to select an available robot (v); the player should be able to send the rescue robot to the stuck robot's position (v)
-47,Manage stuck robot,Unstuck the robot,red,red,red,red,green,red,The player should be able to know that the robot has been rescued (v),The player should be able to predict when the robot will be rescued (x),
-48,Find the monolith,Sense the monolith,green,green,green,green,green,red,The player must be able to access the robot's camera feed to see the monolith in the environment (v),,
-49,Find the monolith,Extract sample from the monolith,red,red,red,green,red,red,,,
+54,Gather resources,Sense wood/mineral in proximity,green,green,green,green,green,red,The player must be able to access the robot's camera feed to see the wood/mineral in the environment (v),,
+61,Find the monolith,Sense gravitational anomaly,green,green,green,green,green,red,The player must have access to the anomaly sensor value (v),,
+62,Find the monolith,Understand the local gravitational anomaly trends,yellow,yellow,yellow,green,green,red,The player must have access to the local anomaly trend  (v),,
+67,Manage stuck robot,Unstuck the robot,red,red,red,red,green,red,The player should be able to know that the robot has been rescued (v),The player should be able to predict when the robot will be rescued (x),
+68,Find the monolith,Sense the monolith,green,green,green,green,green,red,The player must be able to access the robot's camera feed to see the monolith in the environment (v),,
+23,Execute the action,Lift a robot,red,red,red,orange,orange,red,"The UAV should display when it is lifting a UGV, the UGV should display when it is being lifted (v)",The player must be able to predict movable terrain in lifting mode (x),
+1,Placing the base,Observe the map,green,red,red,red,red,red,,,
+2,Placing the base,Select landing coordinates,yellow,red,red,red,red,red,,,
+3,Placing the base,Deploy Base,green,red,red,red,red,red,,,
+4,Deploying the robots,Choose a robot to deploy,green,red,red,red,red,red,,,
+5,Deploying the robots,Deploy the robot,green,green,green,red,red,green,The robot must display where they can/cannot be deployed (v),The player must be able to predict when the robot will be deployed (instantaneous),The player must be able to direct where the robot will be deployed (v)
+6,Planning the mission,Decide a course of action,yellow,red,red,red,red,red,,,
+7,Selection,Select a robot,green,red,red,red,red,red,The robot must display when it is selected/not selected (v),,
+8,Selection,Select a destination,green,red,red,red,red,red,,,
+19,Execute the action,Move through forest,red,red,red,green,red,red,,,
+22,Execute the action,Decide to lift a robot,green,red,red,red,red,red,,,The player should be able to direct the UAV to lift the UGV (v)
+26,Execute the action,Decide to place a bridge,green,green,red,green,red,yellow,The player must be able to see the amount of wood transported by the UGV to place bridges (v); The player should be able to see where the UGV plan on placing a bridge (v),The player must be able to predict the location of the bridge and when it will be placed (v),The player should be able to stop/modify the bridge plan; the player should be able to direct the UGV to place a bridge (v)
+27,Execute the action,Place a bridge,red,red,red,green,red,red,The UGV should display the possible location for placing the bridge (v),The player must be able to predict the location of the bridge (v),
+31,Planning the action,Decide to replan the path,green,red,red,red,red,red,,,The player should be able to send the path to the robot for execution (x)
+34,Establish fragment sample,Sense sample availability,orange,orange,red,green,red,red,Rover shows nearby valid samples.,,Human can select which sample to consider if several are present.
+35,Establish fragment sample,Decide to initiate analysis,green,green,red,orange,red,orange,Rover shows analysis status.,,
+36,Establish fragment sample,Initiate the analyse sample function,green,red,red,green,red,red,,,
+37,Locate meaningful signal in the sample,Sense sample features,yellow,green,red,yellow,red,red,Rover highlights detected features.,,"Human can select additional, or dismiss rover-selected features."
+38,Locate meaningful signal in the sample,Interpret potential signal region,yellow,green,red,yellow,red,yellow,Rover marks candidate.,,"Human can accept, dismiss, or add regions."
+39,Locate meaningful signal in the sample,Decide where to inspect,yellow,green,red,yellow,red,yellow,"Rover shows unexplored, and inspected regions.",,"Human can accept, dismiss, or add regions."
+40,Locate meaningful signal in the sample,Navigate the sample,green,green,red,green,red,yellow,Rover shows current region,Rover shows where intended next target,Human can zoom or pan the view and change target
+41,Improve the signal,Sense changes,yellow,yellow,red,green,red,red,Rover shows measured signal/noise changes after adjustments,,
+42,Improve the signal,Interpret processing effects,yellow,yellow,red,green,red,yellow,Rover shows whether an adjustment improved or degraded measured signal,,"Rover saves past results, Human can switch to past results"
+43,Improve the signal,Decide processing configuration,yellow,yellow,red,yellow,red,yellow,,Rover announce what it will adjust next,"Human can pause, and lock parameters"
+44,Improve the signal,Adjust processing parameters,green,red,red,green,red,yellow,Rover explicitly shows adjustments made,Rover announce what it will adjust next,"Human can pause, undo or adjust"
+45,Discriminate the true signal,Sense reconstructed structures,yellow,yellow,red,yellow,red,yellow,Rover highlights detected structures,,Human can include or exclude or adjust detected structures
+46,Discriminate the true signal,Interpret glyph identity,yellow,yellow,red,red,red,red,Rover shows fragment overlook,,
+47,Discriminate the true signal,Decide whether a candidate is valid,yellow,red,red,red,red,red,,,
+49,Orient the figure,Interpret upright orientation,yellow,yellow,red,yellow,red,yellow,Rover show orientation cues,,Human accept/reject
+50,Orient the figure,Decide rotation correction,yellow,green,red,green,red,yellow,Rover shows angular error,,Human accept/reject/adjust
+51,Orient the figure,Rotate,green,red,red,green,red,yellow,rover shows ghost of initial rotation vs. actual,rover show anticipated direction and magnitude,human adjusts
+52,Extract the monolith position cue,Sense the directional arrow,green,green,red,green,red,yellow,Rover highlight detected arrow,,Human accept/reject/adjust
+53,Extract the monolith position cue,Interpret monolith direction,green,green,red,green,red,yellow,Rover show arrow orientation to world map,,
+55,Gather resources,Recognize wood/mineral,yellow,red,red,orange,red,orange,,,The player should be able to help the robot identifying the resources (x)
+56,Gather resources,Decide to collect wood/mineral,green,red,red,red,red,red,The player should know the overall resources collected and available at base (v),,The player should be able to direct the UGV to collect resources (v)
+57,Gather resources,Collect wood/mineral,red,red,red,green,red,red,The UGV should display the type and number of resources collected (v),The player should be able to predict how much more resources the UGV can collect (v),
+58,Gather resources,Store wood/mineral,red,red,red,green,red,red,,,
+59,Gather resources,Decide to carry the resources back at the base,green,red,red,red,red,red,,,The player should be able to direct the UGV to go back at the base
+60,Gather resources,Drop wood/mineral at base,red,red,red,green,red,red,The UGV must display when the resources are dropped at the base (v),The player should be able to predict that the resources will be automatically dropped at the base when in proximity (x),The player should be able to stop the UGV from dropping resources (x)
+63,Find the monolith,Understand the global gravitational anomaly trend,yellow,yellow,yellow,red,red,red,The player must have access to the aggregation of the anomaly values on the map (v),,
+65,Manage stuck robot,Detect robot stuck,yellow,yellow,red,green,red,red,The stuck robot should send an alert (v),,
+66,Manage stuck robot,Decide to send a rescue robot,green,red,red,red,red,red,The player should know which robot are capable of rescuing the stuck robot (x) ; the player should know which robot is available (v),,The player should be able to select an available robot (v); the player should be able to send the rescue robot to the stuck robot's position (v)
+69,Find the monolith,Extract sample from the monolith,red,red,red,green,red,red,,,
+Row,Procedure,Task,Human*,UGV,UAV,UGV*,UAV*,Human,Observability,Predictability,Directability
+9,Planning the action,Plan path,yellow,green,green,yellow,yellow,yellow,The robot and the player should be able to see the projected path on the map (v),The player should be able to predict the future positions of the robot (v),The player (v) and the robot (x) should be able to modify the path
+64,Find the monolith,Plan path to track high anomaly values,yellow,green,green,yellow,yellow,red,The player must be able to know when the robot has reached a maxima (v),,The player should be able to nudge the robot to get out of a local maxima (v)
+,,,,,,,,,,,
+,,,,,,,,,,,
+,,,,,,,,,,,
